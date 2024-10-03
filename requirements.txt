@@ -1,0 +1,8 @@
+
+cayenne-mqtt
+adafruit-circuitpython-dht
+adafruit-circuitpython-tsl2591
+adafruit-circuitpython-sgp40
+gpiozero
+picamera
+DFRobot_ADS1115

@@ -57,7 +57,6 @@ import re  # Importing regex module for text processing
 from datetime import date, datetime  # Importing date and datetime for logging
 from picamera import PiCamera  # Importing PiCamera for image capture
 from time import sleep  # Importing sleep for delays
-from multiprocessing import Process  # Importing Process for parallel execution
 import adafruit_ads1x15.ads1115 as ADS  # Importing ADC for analog sensor reading
 from adafruit_ads1x15.analog_in import AnalogIn  # Importing analog channel for sensor input
 
@@ -97,8 +96,17 @@ sgp = adafruit_sgp40.SGP40(i2c)
 
 # Setpoints for controlling the actuators
 airTemperatureSetpoint = 26  # Air temperature setpoint for fan control
+LOW_TEMP = 24   # for fan hysteresis
+
 moistureSetPoint = 65        # Soil moisture setpoint for pump control
+HIGH_MOISTURE = 75   # for pump hysteresis
+
 luxSetPoint = 5000           # Lux setpoint for LED control
+
+# State variables for hysteresis
+fan_running = False
+pump_running = False
+
 
 # Cayenne IoT Cloud credentials
 MQTT_USERNAME = "41784500-e842-11ed-9ab8-d511caccfe8c"
@@ -124,22 +132,25 @@ except:
 def get_dhtData():
     """
     Retrieves data from the DHT22 sensor, checks validity, and returns temperature and humidity.
+    Raises:
+        RuntimeError: If sensor data is invalid or unavailable.
     Returns:
         (float, float, float): temperature in Celsius, Fahrenheit, and humidity percentage.
     """
     temperature_c = dht.temperature
     humidity = dht.humidity
 
-    if humidity is not None and temperature_c is not None:
-        if -40 <= temperature_c <= 80 and 0 <= humidity <= 100:
-            temperature_f = temperature_c * 9 / 5 + 32
-            return round(temperature_c, 2), round(temperature_f, 2), round(humidity, 2)
-        else:
-            print("DHT22 temperature or humidity out of range.")
-            return 0, 0, 0
-    else:
-        print("Failed to retrieve data from DHT22 sensor.")
-        return 0, 0, 0
+    # Check if sensor returned any data
+    if humidity is None or temperature_c is None:
+        raise RuntimeError("DHT22 read failed")
+
+    # Validate range
+    if not (-40 <= temperature_c <= 80 and 0 <= humidity <= 100):
+        raise RuntimeError("DHT22 data out of range")
+
+    temperature_f = temperature_c * 9 / 5 + 32
+
+    return round(temperature_c, 2), round(temperature_f, 2), round(humidity, 2)
 
 # Function to get lux data from the TSL2591 sensor
 def get_luxData():
@@ -246,20 +257,32 @@ def runFan():
     """
     Controls the fan (relay1) based on the air temperature setpoint.
     """
-    if airTemperature_c > airTemperatureSetpoint:
-        Relay1.off()  # Turns the fan on
-    else:
-        Relay1.on()  # Turns the fan off
+    global fan_running
+
+    # Hysteresis control for fan
+    if not fan_running and airTemperature_c > airTemperatureSetpoint:
+        Relay1.off()  # Fan ON (active-low)
+        fan_running = True
+
+    elif fan_running and airTemperature_c < LOW_TEMP:
+        Relay1.on()   # Fan OFF
+        fan_running = False
 
 # Function to control the pump based on soil moisture setpoint
 def runPump():
     """
     Controls the pump (relay3) based on the soil moisture setpoint.
     """
-    if soilMoisture_value < moistureSetPoint:
-        Relay3.off()  # Turns the pump on
-    else:
-        Relay3.on()  # Turns the pump off
+    global pump_running
+
+    # Hysteresis control for pump
+    if not pump_running and soilMoisture_value < moistureSetPoint:
+        Relay3.off()  # Pump ON (active-low)
+        pump_running = True
+
+    elif pump_running and soilMoisture_value > HIGH_MOISTURE:
+        Relay3.on()   # Pump OFF
+        pump_running = False
 
 # Function to control LED light based on time and lux value
 def runLED():
@@ -305,11 +328,7 @@ Relay3.on()
 
 # Main loop for data processing and control
 while True:
-    # Start parallel processes for running fan, pump, and LED control
-    p1 = Process(target=runFan)  # Process for controlling the fan
-    p2 = Process(target=runPump)  # Process for controlling the pump
-    p3 = Process(target=runLED)  # Process for controlling the LED
-
+    
     try:
         # Keeps Cayenne client connected and syncing with the cloud
         client.loop()
@@ -353,13 +372,11 @@ while True:
             file.write(f"\n{timeNow} {airTemperature_c} {airTemperature_f} {airHumidity} {lux_value} {soilMoisture_value} {soilTemperature_c} {soilTemperature_f} {voc_index}")
             file.flush()
 
-        # Start and join parallel processes for controlling fan, pump, and LED
-        p1.start()
-        p1.join()  # Ensures the fan control process finishes before moving on
-        p2.start()
-        p2.join()  # Ensures the pump control process finishes
-        p3.start()
-        p3.join()  # Ensures the LED control process finishes
+        
+        # Sequential actuator control based on latest sensor readings
+        runFan()   # Temperature-based control
+        runPump()  # Soil moisture-based control
+        runLED()   # Light + time-based control
 
         # Capture image between 9 AM and 5 PM
         capture_image()

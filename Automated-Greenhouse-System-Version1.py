@@ -91,6 +91,9 @@ sgp = adafruit_sgp40.SGP40(i2c)
 
 # Define the desired temperature range and PID constants
 airTemperatureSetpoint = 26
+LOW_TEMP = 24
+fan_running = False 
+
 Kp = 15.0  # Proportional gain
 Ki = 0.0  # Integral gain
 Kd = 0.0  # Derivative gain
@@ -105,6 +108,9 @@ time_interval = 60  # 1 minute
 luxSetPoint = 5000
 # Define the desired temperature range and PID constants
 moistureSetPoint = 65
+HIGH_MOISTURE = 75
+pump_running = False
+
 Kps = 5.0  # Proportional gain
 Kis = 0.0  # Integral gain
 Kds = 0.0  # Derivative gain
@@ -288,25 +294,36 @@ def PIDControllerSOilMoisture(data):
 
     return pump_value, on_duration_s
 
-def runFan():
 
-    if airTemperature_c > airTemperatureSetpoint:
-        Relay1.off() #turns relay2 on
-        print("Fan is running")
-    else:
-        Relay1.on()  #turns relay2 off
-        print("Fan has stopped")
+
+def runFan():
+    global fan_running
+
+    if not fan_running and airTemperature_c > airTemperatureSetpoint:
+        Relay1.off()
+        fan_running = True
+        print("Fan ON")
+
+    elif fan_running and airTemperature_c < LOW_TEMP:
+        Relay1.on()
+        fan_running = False
+        print("Fan OFF")
         
-        
+       
 
 def runPump():
+    global pump_running
 
-    if soilMoisture_value < moistureSetPoint:
-        Relay3.off() #turns relay2 on
-        print("PUMP is running")
-    else:
-        Relay3.on()  #turns relay2 off
-        print("PUMP has stopped")
+    # Hysteresis control for soil moisture
+    if not pump_running and soilMoisture_value < moistureSetPoint:
+        Relay3.off()  # Pump ON (active-low)
+        pump_running = True
+        print("PUMP ON")
+
+    elif pump_running and soilMoisture_value > HIGH_MOISTURE:
+        Relay3.on()   # Pump OFF
+        pump_running = False
+        print("PUMP OFF")
     
 
 def runLED():
